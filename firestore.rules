@@ -1,0 +1,212 @@
+rules_version = '2';
+
+// AfterClass Firestore rules. Deny by default; every collection is opened explicitly.
+// Policy mirrors src/lib/domain.ts: verified accounts on the cvv.ac.in domain only.
+//
+// Quiz scoring (no backend, Spark plan):
+//   1. Student creates quizAttempts/{quizId_uid} with answers only (create-only, one per quiz).
+//   2. Answer key (quizKeys) becomes readable to that student only once the attempt exists.
+//   3. Student writes per-question marks (0/1). Rules check each mark against the hidden key.
+//      Answers cannot change after creation.
+//   4. Student appends quizId to users.scoredQuizzes and adds the verified marks to points.
+//      Rules check the attempt's uid/quizId and that each quiz is awarded only once.
+// Points and scores are therefore never accepted from the client without rule verification.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isApprovedStudent() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email.lower().matches('^[a-z0-9][a-z0-9._+-]*@cvv\\.ac\\.in$');
+    }
+
+    // Custom claim "admin": true, set only by a trusted administrator script (not yet built).
+    function isAdmin() {
+      return isApprovedStudent() && request.auth.token.get('admin', false) == true;
+    }
+
+    function validName(name) {
+      return name is string && name.size() >= 2 && name.size() <= 60;
+    }
+
+    // Quiz format is fixed: five single-choice questions q1..q5, options a..d.
+    function validChoice(v) {
+      return v in ['a', 'b', 'c', 'd'];
+    }
+
+    function validAnswers(a) {
+      return a is map
+        && a.keys().size() == 5
+        && a.keys().hasOnly(['q1', 'q2', 'q3', 'q4', 'q5'])
+        && validChoice(a.q1) && validChoice(a.q2) && validChoice(a.q3) && validChoice(a.q4) && validChoice(a.q5);
+    }
+
+    // A mark of 1 requires a correct answer; a mark of 0 requires a wrong one. Anything else fails.
+    function markOk(a, k, m, q) {
+      return (m[q] == 1 && a[q] == k[q]) || (m[q] == 0 && a[q] != k[q]);
+    }
+
+    function marksValid(a, k, m) {
+      return m is map
+        && m.keys().size() == 5
+        && m.keys().hasOnly(['q1', 'q2', 'q3', 'q4', 'q5'])
+        && markOk(a, k, m, 'q1') && markOk(a, k, m, 'q2') && markOk(a, k, m, 'q3')
+        && markOk(a, k, m, 'q4') && markOk(a, k, m, 'q5');
+    }
+
+    // Verifies the single appended quiz award: one new entry, not previously scored,
+    // backed by this student's own attempt, and points rise by exactly that attempt's marks.
+    function awardOk() {
+      let newIndex = resource.data.scoredQuizzes.size();
+      let quizId = request.resource.data.scoredQuizzes[newIndex];
+      let att = get(/databases/$(database)/documents/quizAttempts/$(quizId + '_' + request.auth.uid)).data;
+      return request.resource.data.scoredQuizzes.size() == newIndex + 1
+        && !(quizId in resource.data.scoredQuizzes)
+        && request.resource.data.scoredQuizzes == resource.data.scoredQuizzes.concat([quizId])
+        && att.uid == request.auth.uid
+        && att.quizId == quizId
+        && request.resource.data.points == resource.data.points
+          + att.marks.q1 + att.marks.q2 + att.marks.q3 + att.marks.q4 + att.marks.q5;
+    }
+
+    // ---- users/{uid}: one profile per student -------------------------------------------
+    match /users/{uid} {
+      // Leaderboard reads (ordered by points, bounded in the client) are open to verified students.
+      allow read: if isApprovedStudent();
+
+      allow create: if isApprovedStudent()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['displayName', 'photoURL', 'points', 'streak', 'scoredQuizzes', 'createdAt', 'updatedAt'])
+        && validName(request.resource.data.displayName)
+        && (request.resource.data.photoURL == null
+            || (request.resource.data.photoURL is string
+                && request.resource.data.photoURL.size() <= 500
+                && request.resource.data.photoURL.matches('^https://.*')))
+        && request.resource.data.points == 0
+        && request.resource.data.streak == 0
+        && request.resource.data.scoredQuizzes == []
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+
+      allow update: if isApprovedStudent()
+        && request.auth.uid == uid
+        && (
+          // (a) rename only
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'updatedAt'])
+            && validName(request.resource.data.displayName)
+            && request.resource.data.updatedAt == request.time)
+          ||
+          // (b) award one verified quiz result
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['points', 'scoredQuizzes', 'updatedAt'])
+            && request.resource.data.updatedAt == request.time
+            && awardOk())
+        );
+
+      allow delete: if false;
+    }
+
+    // ---- quizzes/{quizId}: question text and options, never answers ----------------------
+    match /quizzes/{quizId} {
+      allow read: if isAdmin() || (isApprovedStudent() && resource.data.status == 'published');
+      allow write: if isAdmin();
+    }
+
+    // ---- quizKeys/{quizId}: answers and explanations; readable only after the student's attempt
+    match /quizKeys/{quizId} {
+      allow read: if isAdmin()
+        || (isApprovedStudent()
+            && exists(/databases/$(database)/documents/quizAttempts/$(quizId + '_' + request.auth.uid)));
+      allow write: if isAdmin();
+    }
+
+    // ---- quizAttempts/{quizId_uid}: create once, then add verified marks once ------------
+    match /quizAttempts/{attemptId} {
+      // Missing docs have resource == null: a student may check their own ID (not-found, not denied),
+      // and IDs belonging to other students stay unreadable, so existence is not revealed.
+      allow read: if isAdmin() || (isApprovedStudent()
+        && attemptId.matches('.*_' + request.auth.uid)
+        && (resource == null || resource.data.uid == request.auth.uid));
+
+      allow create: if isApprovedStudent()
+        && request.resource.data.keys().hasOnly(['uid', 'quizId', 'answers', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.quizId is string
+        && attemptId == request.resource.data.quizId + '_' + request.auth.uid
+        && get(/databases/$(database)/documents/quizzes/$(request.resource.data.quizId)).data.status == 'published'
+        && validAnswers(request.resource.data.answers)
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isApprovedStudent()
+        && resource.data.uid == request.auth.uid
+        && !('marks' in resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['marks', 'marksAt'])
+        && request.resource.data.marksAt == request.time
+        && marksValid(
+             resource.data.answers,
+             get(/databases/$(database)/documents/quizKeys/$(resource.data.quizId)).data.answers,
+             request.resource.data.marks);
+
+      allow delete: if false;
+    }
+
+    // ---- polls/{pollId} -------------------------------------------------------------------
+    match /polls/{pollId} {
+      allow read: if isAdmin() || (isApprovedStudent() && resource.data.status in ['published', 'closed']);
+      allow write: if isAdmin();
+    }
+
+    // ---- pollVotes/{pollId_uid}: create once while the poll is published ------------------
+    // Tallies are NOT published: a rule cannot make counters tamper-proof without exposing voters.
+    match /pollVotes/{voteId} {
+      // Same pattern as quizAttempts: own ID only, and missing docs are not-found rather than denied.
+      allow read: if isAdmin() || (isApprovedStudent()
+        && voteId.matches('.*_' + request.auth.uid)
+        && (resource == null || resource.data.uid == request.auth.uid));
+
+      allow create: if isApprovedStudent()
+        && request.resource.data.keys().hasOnly(['uid', 'pollId', 'option', 'createdAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.pollId is string
+        && voteId == request.resource.data.pollId + '_' + request.auth.uid
+        && get(/databases/$(database)/documents/polls/$(request.resource.data.pollId)).data.status == 'published'
+        && request.resource.data.option in get(/databases/$(database)/documents/polls/$(request.resource.data.pollId)).data.options
+        && request.resource.data.createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // ---- suggestions/{id}: students submit; admins review and change status only ---------
+    match /suggestions/{suggestionId} {
+      allow read: if isAdmin() || (isApprovedStudent() && resource.data.uid == request.auth.uid);
+
+      allow create: if isApprovedStudent()
+        && request.resource.data.keys().hasOnly(['uid', 'title', 'body', 'category', 'status', 'createdAt', 'reviewedAt'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.title is string
+        && request.resource.data.title.size() >= 3 && request.resource.data.title.size() <= 120
+        && request.resource.data.body is string
+        && request.resource.data.body.size() >= 10 && request.resource.data.body.size() <= 1000
+        && request.resource.data.category in ['academics', 'facilities', 'events', 'other']
+        && request.resource.data.status == 'submitted'
+        && request.resource.data.reviewedAt == null
+        && request.resource.data.createdAt == request.time;
+
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'reviewedAt'])
+        && request.resource.data.status in ['submitted', 'planned', 'done', 'declined'];
+
+      allow delete: if false;
+    }
+
+    // ---- adminAuditLogs: reserved; no client access -------------------------------------
+    match /adminAuditLogs/{logId} {
+      allow read, write: if false;
+    }
+
+    // ---- Default deny for anything not listed above --------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,51 @@
+@import 'tailwindcss';
+
+/*
+  AfterClass design tokens. Single source for color, type, radius, shadow and motion.
+  Use the semantic names (surface, ink, accent-*) in components, not raw hex values.
+*/
+@theme {
+  --color-cream: #fbf6ea;
+  --color-paper: #fffdf6;
+  --color-sand: #f1e8d4;
+  --color-ink: #1f1a2e;
+  --color-ink-soft: #4a4358;
+  --color-lime: #c6f432;
+  --color-lime-deep: #3d6b00;
+  --color-pink: #ff7ab6;
+  --color-pink-soft: #ffd6e8;
+  --color-violet: #6f4cff;
+  --color-violet-soft: #e4dcff;
+
+  --font-display: 'Georgia', 'Iowan Old Style', 'Palatino Linotype', serif;
+  --font-sans: ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  --radius-card: 1.5rem;
+  --shadow-card: 6px 6px 0 0 var(--color-ink);
+  --shadow-lift: 3px 3px 0 0 var(--color-ink);
+}
+
+@layer base {
+  html {
+    background: var(--color-cream);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    min-height: 100dvh;
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-violet);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

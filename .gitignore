@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.firebase/
+.vercel/
+.firebaserc
+# Contains a complete answer key. Keep local only; never publish the sample key with a public repository.
+docs/sample-quiz.json
+firebase-debug.log*
+firestore-debug.log*
+service-account*.json
+functions/lib/
+*.tsbuildinfo
