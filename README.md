@@ -122,10 +122,10 @@ explanations. A student who gets an error after step 1 can finish later, but can
 | Collection | Purpose | Client read | Client write |
 |---|---|---|---|
 | `users/{uid}` | Profile: displayName, photoURL, points, streak, scoredQuizzes | Verified CVV students (leaderboard) | Owner renames; owner awards a verified quiz result. Nothing else. |
-| `quizzes/{id}` | Title, `day`, `status` (draft/published/closed), five questions without answers | Students, if published | Admin claim only (not yet available) |
-| `quizKeys/{id}` | Answers and explanations | Admin, or a student with an attempt | Admin claim only |
+| `quizzes/{id}` | Title, `day`, `status` (draft/published/closed), five questions without answers | Students, if published | Administrator only |
+| `quizKeys/{id}` | Answers and explanations | Admin, or a student with an attempt | Administrator only |
 | `quizAttempts/{quizId}_{uid}` | Answers, marks, timestamps | Owner, admin | Owner creates once, then adds marks once. No deletes. |
-| `polls/{id}` | `question`, `options` (list of strings), `status`, `createdAt` | Students, if published or closed | Admin claim only |
+| `polls/{id}` | `question`, `options` (list of strings), `status`, `createdAt` | Students, if published or closed | Administrator only |
 | `pollVotes/{pollId}_{uid}` | `option`, `uid`, `pollId` | Owner, admin | Owner creates once while the poll is published. No updates. |
 | `suggestions/{id}` | `title`, `body`, `category`, `status`, `uid` | Owner, admin | Owner creates `submitted`. Admin changes `status` and `reviewedAt`. |
 | `adminAuditLogs/{id}` | Reserved | None | None |
@@ -175,16 +175,15 @@ Caveat: a "should fail" test can pass for the wrong reason. Earlier in developme
 the negative award tests passed trivially. After that bug was fixed, the whole suite was re-run and passed. I have not
 verified, case by case, which rule rejects each negative test.
 
-## Initial administrator provisioning (not implemented)
+## Administrator access
 
-No admin tools exist yet, so `isAdmin()` is never true for anyone. Planned for a later milestone:
+There is one administrator: the verified Google account `bhogavalli.cvv241072@cvv.ac.in`. `isAdmin()` in
+`firestore.rules` checks that email on the signed ID token, after the existing verified `@cvv.ac.in` check. Every
+other account, including other `@cvv.ac.in` accounts, is a student.
 
-1. A local script with a service-account key kept outside the repository sets the `admin` custom claim for one UID
-   that you specify.
-2. No automatic promotion and no public endpoint.
-3. The admin signs out and back in to refresh the token.
-
-Until then, all admin operations happen in the Firebase console as the project owner.
+- There are no custom claims, provisioning scripts, service-account keys, or stored admin secrets.
+- The `/admin` PIN is a cosmetic screen lock. It is not a security boundary.
+- To change the administrator, edit `isAdmin()` and `src/lib/adminIdentity.ts`, then redeploy the rules.
 
 ## Deployment (Vercel)
 
@@ -260,5 +259,5 @@ account.
 
 1. Connect a Firebase project on Spark, deploy the rules and indexes, and run the verification checklist above.
 2. Test the whole scoring flow in the emulator UI with a seeded quiz.
-3. Decide whether to build the admin claim script and an admin dashboard for quizzes, polls and suggestion status.
+3. Deploy the rules (see the Firebase steps above) and verify the admin dashboard with the administrator account.
 4. Add lazy loading for the Firebase routes.

@@ -21,9 +21,11 @@ service cloud.firestore {
         && request.auth.token.email.lower().matches('^[a-z0-9][a-z0-9._+-]*@cvv\\.ac\\.in$');
     }
 
-    // Custom claim "admin": true, set only by a trusted administrator script (not yet built).
+    // The sole administrator: one verified @cvv.ac.in Google account. The identity comes from the
+    // signed ID token, which the client cannot set. No custom claims, scripts, or stored secrets.
+    // Every other account, including other verified @cvv.ac.in accounts, is a student.
     function isAdmin() {
-      return isApprovedStudent() && request.auth.token.get('admin', false) == true;
+      return isApprovedStudent() && request.auth.token.email.lower() == 'bhogavalli.cvv241072@cvv.ac.in';
     }
 
     function validName(name) {
@@ -107,9 +109,34 @@ service cloud.firestore {
     }
 
     // ---- quizzes/{quizId}: question text and options, never answers ----------------------
+    // Lifecycle enforced here, not only in the UI: draft -> published -> closed, and nothing else.
+    // A published quiz is immutable except for closing it. Closed quizzes are final. No deletes.
     match /quizzes/{quizId} {
       allow read: if isAdmin() || (isApprovedStudent() && resource.data.status == 'published');
-      allow write: if isAdmin();
+
+      allow create: if isAdmin()
+        && request.resource.data.status == 'draft'
+        && request.resource.data.day == quizId;
+
+      allow update: if isAdmin()
+        && request.resource.data.day == resource.data.day
+        && (
+          // (a) edit a draft; it stays a draft
+          (resource.data.status == 'draft' && request.resource.data.status == 'draft')
+          ||
+          // (b) publish a draft, only when its answer key exists and no content changes
+          (resource.data.status == 'draft'
+            && request.resource.data.status == 'published'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'publishedAt', 'updatedAt'])
+            && exists(/databases/$(database)/documents/quizKeys/$(quizId)))
+          ||
+          // (c) close a published quiz; nothing else changes
+          (resource.data.status == 'published'
+            && request.resource.data.status == 'closed'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'closedAt', 'updatedAt']))
+        );
+
+      allow delete: if false;
     }
 
     // ---- quizKeys/{quizId}: answers and explanations; readable only after the student's attempt
@@ -117,7 +144,14 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (isApprovedStudent()
             && exists(/databases/$(database)/documents/quizAttempts/$(quizId + '_' + request.auth.uid)));
-      allow write: if isAdmin();
+
+      // Keys change only while the quiz is a draft. The second clause covers the batch that creates a
+      // draft quiz and its key together: the quiz does not exist yet when the rule is evaluated.
+      allow create, update: if isAdmin()
+        && (!exists(/databases/$(database)/documents/quizzes/$(quizId))
+            || get(/databases/$(database)/documents/quizzes/$(quizId)).data.status == 'draft');
+
+      allow delete: if false;
     }
 
     // ---- quizAttempts/{quizId_uid}: create once, then add verified marks once ------------
@@ -151,9 +185,29 @@ service cloud.firestore {
     }
 
     // ---- polls/{pollId} -------------------------------------------------------------------
+    // Same lifecycle as quizzes: a published poll's question and options are fixed, so votes stay meaningful.
     match /polls/{pollId} {
       allow read: if isAdmin() || (isApprovedStudent() && resource.data.status in ['published', 'closed']);
-      allow write: if isAdmin();
+
+      allow create: if isAdmin() && request.resource.data.status == 'draft';
+
+      allow update: if isAdmin()
+        && (
+          // (a) edit a draft; it stays a draft
+          (resource.data.status == 'draft' && request.resource.data.status == 'draft')
+          ||
+          // (b) publish a draft; content does not change
+          (resource.data.status == 'draft'
+            && request.resource.data.status == 'published'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'publishedAt', 'updatedAt']))
+          ||
+          // (c) close a published poll; nothing else changes
+          (resource.data.status == 'published'
+            && request.resource.data.status == 'closed'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'closedAt', 'updatedAt']))
+        );
+
+      allow delete: if false;
     }
 
     // ---- pollVotes/{pollId_uid}: create once while the poll is published ------------------

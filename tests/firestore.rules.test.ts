@@ -27,7 +27,7 @@ import { castVote, fetchOpenPolls, submitSuggestion } from '../src/lib/community
 // Runs against the local Firestore emulator only (npm run test:rules). No billing involved.
 const STUDENT = { email: 'asha.rao@cvv.ac.in', email_verified: true };
 const OTHER_STUDENT = { email: 'ravi@cvv.ac.in', email_verified: true };
-const ADMIN = { email: 'admin@cvv.ac.in', email_verified: true, admin: true };
+const ADMIN = { email: 'bhogavalli.cvv241072@cvv.ac.in', email_verified: true };
 const GMAIL_USER = { email: 'someone@gmail.com', email_verified: true };
 const UNVERIFIED = { email: 'asha.rao@cvv.ac.in', email_verified: false };
 
@@ -162,7 +162,8 @@ describe('quiz visibility', () => {
 
   it('lets only admins write quizzes and read answer keys without an attempt', async () => {
     const admin = db('admin', ADMIN);
-    await assertSucceeds(setDoc(doc(admin, 'quizzes', 'q-new'), { title: 'New', status: 'draft', day: '2026-11-01', questions: [] }));
+    // A quiz is keyed by its day, as the app does; the rules require the two to match on create.
+    await assertSucceeds(setDoc(doc(admin, 'quizzes', '2026-11-01'), { title: 'New', status: 'draft', day: '2026-11-01', questions: [] }));
     await assertSucceeds(getDoc(doc(admin, 'quizKeys', 'q-open')));
     await assertFails(setDoc(doc(db('asha'), 'quizzes', 'q-x'), { title: 'x', status: 'published' }));
   });

@@ -43,7 +43,20 @@ export function AppShell() {
       <footer className="border-t-2 border-ink bg-paper">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-5 py-8 text-sm text-ink-soft sm:flex-row sm:justify-between sm:px-8">
           <p>AfterClass is an unofficial student project for Chinmaya Vishwa Vidyapeeth.</p>
-          <p>Access is limited to the approved college community.</p>
+          <div className="flex items-center gap-4">
+            <p>Access is limited to the approved college community.</p>
+            <Link
+              to="/admin"
+              aria-label="Admin access"
+              title="Admin access"
+              className="inline-flex size-9 shrink-0 items-center justify-center rounded-full text-ink-soft opacity-60 hover:bg-sand hover:opacity-100 focus-visible:outline-violet"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="11" width="16" height="10" rx="2" />
+                <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+              </svg>
+            </Link>
+          </div>
         </div>
       </footer>
     </div>
