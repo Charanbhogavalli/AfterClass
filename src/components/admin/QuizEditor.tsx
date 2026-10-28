@@ -26,17 +26,20 @@ export function blankQuiz(): AdminQuizInput {
  * fixed once a quiz exists. Answers and explanations are saved to the separate quizKeys document.
  */
 export function QuizEditor({
-  initial,
+  form,
+  onFormChange,
   isNew,
   onSaved,
   onCancel,
 }: {
-  initial: AdminQuizInput;
+  /** Owned by the parent, so switching to the bulk importer and back keeps unsaved work. */
+  form: AdminQuizInput;
+  onFormChange: (next: AdminQuizInput) => void;
   isNew: boolean;
   onSaved: (day: string) => void;
   onCancel: () => void;
 }) {
-  const [form, setForm] = useState<AdminQuizInput>(initial);
+  const setForm = (update: (current: AdminQuizInput) => AdminQuizInput) => onFormChange(update(form));
   const [problems, setProblems] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState(false);

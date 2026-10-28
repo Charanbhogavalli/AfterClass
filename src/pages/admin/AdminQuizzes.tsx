@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../../components/ui/Button';
+import { BulkImport } from '../../components/admin/BulkImport';
 import { ConfirmDialog, Notice, StatusTag, useBusyGuard } from '../../components/admin/AdminUi';
 import { QuizEditor, QuizPreview, blankQuiz } from '../../components/admin/QuizEditor';
 import {
@@ -10,6 +11,7 @@ import {
   type AdminQuizDetail,
   type AdminQuizRow,
 } from '../../lib/admin';
+import { CHOICES } from '../../lib/quiz';
 import type { AdminQuizInput, QuizStatus } from '../../lib/adminValidation';
 import { requireDb } from '../../lib/firebase';
 import { logDevError } from '../../lib/errors';
@@ -17,12 +19,23 @@ import { logDevError } from '../../lib/errors';
 type View =
   | { kind: 'list' }
   | { kind: 'new' }
-  | { kind: 'edit'; day: string; initial: AdminQuizInput }
+  | { kind: 'edit'; day: string }
   | { kind: 'preview'; detail: AdminQuizDetail };
+
+type EntryTab = 'manual' | 'bulk';
 
 interface Confirm {
   to: Extract<QuizStatus, 'published' | 'closed'>;
   row: AdminQuizRow;
+}
+
+/** True when the manual form holds nothing the admin typed, so an import can replace it silently. */
+function isBlankForm(form: AdminQuizInput): boolean {
+  return (
+    form.day === '' &&
+    form.title === '' &&
+    form.questions.every((q) => q.text === '' && q.explanation === '' && q.answer === '' && CHOICES.every((c) => q.options[c] === ''))
+  );
 }
 
 export function AdminQuizzes() {
@@ -31,6 +44,11 @@ export function AdminQuizzes() {
   const [view, setView] = useState<View>({ kind: 'list' });
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  // The new-quiz state lives here, not in the editor, so switching tabs keeps unsaved work.
+  const [draftForm, setDraftForm] = useState<AdminQuizInput>(blankQuiz());
+  const [entryTab, setEntryTab] = useState<EntryTab>('manual');
+  const [bulkText, setBulkText] = useState('');
+  const [pendingImport, setPendingImport] = useState<AdminQuizInput | null>(null);
   const { busy, run } = useBusyGuard();
 
   const load = useCallback(async () => {
@@ -47,6 +65,14 @@ export function AdminQuizzes() {
     void load();
   }, [load]);
 
+  function openNew(tab: EntryTab) {
+    setNotice(null);
+    // Bulk import keeps any manual draft and pasted text; "New quiz draft" starts clean.
+    if (tab === 'manual') setDraftForm(blankQuiz());
+    setEntryTab(tab);
+    setView({ kind: 'new' });
+  }
+
   async function openDetail(row: AdminQuizRow, mode: 'edit' | 'preview') {
     setNotice(null);
     try {
@@ -56,12 +82,27 @@ export function AdminQuizzes() {
         await load();
         return;
       }
-      if (mode === 'preview') setView({ kind: 'preview', detail });
-      else setView({ kind: 'edit', day: row.day, initial: detail.input });
+      if (mode === 'preview') {
+        setView({ kind: 'preview', detail });
+      } else {
+        setDraftForm(detail.input);
+        setView({ kind: 'edit', day: row.day });
+      }
     } catch (err) {
       logDevError('admin quiz detail', err);
       setNotice({ kind: 'error', text: adminErrorMessage(err, 'This quiz could not be opened. It may be malformed.') });
     }
+  }
+
+  function applyImport(quiz: AdminQuizInput) {
+    setDraftForm(quiz);
+    setEntryTab('manual');
+    setNotice({ kind: 'ok', text: `${quiz.questions.length} questions imported into the draft editor. Review them and save your draft.` });
+  }
+
+  function requestImport(quiz: AdminQuizInput) {
+    if (isBlankForm(draftForm)) applyImport(quiz);
+    else setPendingImport(quiz);
   }
 
   async function applyConfirm() {
@@ -83,21 +124,64 @@ export function AdminQuizzes() {
 
   if (view.kind === 'new' || view.kind === 'edit') {
     const isNew = view.kind === 'new';
+    const showBulk = isNew && entryTab === 'bulk';
     return (
       <section aria-labelledby="quiz-editor-title" className="flex flex-col gap-6">
         <header>
-          <h1 id="quiz-editor-title" className="font-display text-4xl leading-tight font-bold">{isNew ? 'New quiz draft' : 'Edit draft'}</h1>
-          <p className="mt-2 text-ink-soft">Five multiple-choice questions, four options each. Drafts are not visible to students.</p>
+          <h1 id="quiz-editor-title" className="font-display text-4xl leading-tight font-bold">
+            {!isNew ? 'Edit draft' : showBulk ? 'Bulk import' : 'New quiz draft'}
+          </h1>
+          <p className="mt-2 text-ink-soft">
+            Five multiple-choice questions, four options each. Drafts are not visible to students.
+          </p>
         </header>
-        <QuizEditor
-          initial={isNew ? blankQuiz() : view.initial}
-          isNew={isNew}
-          onCancel={() => setView({ kind: 'list' })}
-          onSaved={(day) => {
-            setView({ kind: 'list' });
-            setNotice({ kind: 'ok', text: `Draft for ${day} saved. It is not published.` });
-            void load();
+
+        {notice && <Notice kind={notice.kind}>{notice.text}</Notice>}
+
+        {isNew && (
+          <div role="group" aria-label="Quiz entry method" className="flex flex-wrap gap-2">
+            {(['manual', 'bulk'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                aria-pressed={entryTab === tab}
+                onClick={() => setEntryTab(tab)}
+                className={`rounded-full border-2 border-ink px-4 py-2 font-semibold focus-visible:outline-violet ${entryTab === tab ? 'bg-lime' : 'bg-paper hover:bg-sand'}`}
+              >
+                {tab === 'manual' ? 'Manual editor' : 'Bulk import'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {showBulk ? (
+          <BulkImport text={bulkText} onTextChange={setBulkText} onImport={requestImport} />
+        ) : (
+          <QuizEditor
+            form={draftForm}
+            onFormChange={setDraftForm}
+            isNew={isNew}
+            onCancel={() => setView({ kind: 'list' })}
+            onSaved={(day) => {
+              setView({ kind: 'list' });
+              setBulkText('');
+              setNotice({ kind: 'ok', text: `Draft for ${day} saved. It is not published.` });
+              void load();
+            }}
+          />
+        )}
+
+        <ConfirmDialog
+          open={pendingImport !== null}
+          busy={false}
+          title="Replace the manual draft?"
+          body="The imported quiz will replace what is on the manual form. Save the draft first if you want to keep it."
+          confirmLabel="Replace with import"
+          onConfirm={() => {
+            if (pendingImport) applyImport(pendingImport);
+            setPendingImport(null);
           }}
+          onCancel={() => setPendingImport(null)}
         />
       </section>
     );
@@ -122,7 +206,10 @@ export function AdminQuizzes() {
           <h1 id="quizzes-title" className="font-display text-4xl leading-tight font-bold">Quizzes</h1>
           <p className="mt-2 text-ink-soft">Newest first. Publishing makes a quiz visible to students.</p>
         </div>
-        <Button onClick={() => setView({ kind: 'new' })}>New quiz draft</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => openNew('bulk')}>Bulk import</Button>
+          <Button onClick={() => openNew('manual')}>New quiz draft</Button>
+        </div>
       </header>
 
       {notice && <Notice kind={notice.kind}>{notice.text}</Notice>}
